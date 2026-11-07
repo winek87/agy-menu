@@ -35,12 +35,6 @@ assignees: []
 ## `agy-menu --diagnose`
 
 <!-- Wklej output tej komendy. Pomaga ustalić, które konta są wykryte i czytelne. -->
-
-{ _ble_edit_exec_gexec__save_lastarg "$@"; } 4>&1 5>&2 &>/dev/null
-
-## `agy-menu --diagnose`
-
-<!-- Wklej output tej komendy. Pomaga ustalić, które konta są wykryte i czytelne. -->
 <!-- tutaj -->
 
 ## Logi / zrzuty

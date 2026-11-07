@@ -437,3 +437,109 @@ assignees: []
 ## `agy-menu --diagnose`
 
 <!-- Wklej output tej komendy. Pomaga ustalić, które konta są wykryte i czytelne. -->
+<!-- tutaj -->
+
+## Logi / zrzuty
+
+<!--
+Jeśli błąd dotyczy renderowania — wklej screenshot.
+Jeśli dotyczy `su` — wklej pełny output `su zakończył się kodem …`.
+Logi błędów uruchomienia: `RUST_BACKTRACE=1 agy-menu 2>err.log`
+-->
+
+## Dodatkowy kontekst
+
+<!-- Cokolwiek jeszcze może pomóc. -->
+PYEOF
+
+# ─────────────────────────────────── .github/ISSUE_TEMPLATE/feature_request.md
+cat << 'PYEOF' > .github/ISSUE_TEMPLATE/feature_request.md
+---
+name: 💡 Feature request
+about: Zaproponuj nową funkcję lub ulepszenie
+title: "[FEAT] "
+labels: ["enhancement", "triage"]
+assignees: []
+---
+
+## Problem / motywacja
+
+<!-- Jaki problem chcesz rozwiązać? Np. „Przewijanie transkryptu jest wolne przy 50k linii”. -->
+
+## Proponowane rozwiązanie
+
+<!-- Co chciałbyś zobaczyć? Konkretne klawisze, zachowanie, interfejs. -->
+
+## Alternatywy
+
+<!-- Czy rozważałeś inne podejścia? Dlaczego odrzucone? -->
+
+## Dodatkowy kontekst
+
+<!-- Screeny, linki, podobne rozwiązania w innych narzędziach. -->
+
+## Czy możesz pomóc przy implementacji?
+
+- [ ] Tak, mogę zrobić PR
+- [ ] Tak, ale potrzebuję wskazówek
+- [ ] Nie, tylko zgłaszam
+PYEOF
+
+# ─────────────────────────────────────── .github/ISSUE_TEMPLATE/config.yml
+cat << PYEOF > .github/ISSUE_TEMPLATE/config.yml
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Dokumentacja
+    url: https://github.com/${USER_NAME}/agy-menu#readme
+    about: Przeczytaj README przed otwarciem issue — może już jest odpowiedź.
+  - name: 💬 Dyskusje
+    url: https://github.com/${USER_NAME}/agy-menu/discussions
+    about: Pytania, pomysły, pomoc — tutaj zamiast w issues.
+PYEOF
+
+# ─────────────────────────────────────── .github/PULL_REQUEST_TEMPLATE.md
+cat << 'PYEOF' > .github/PULL_REQUEST_TEMPLATE.md
+## Opis
+
+<!-- Co ten PR zmienia i dlaczego. Link do issue: „Closes #123”. -->
+
+Closes #
+
+## Rodzaj zmiany
+
+- [ ] 🐛 Bug fix (nie łamie API)
+- [ ] ✨ Nowa funkcja (nie łamie API)
+- [ ] 💥 Breaking change (łamie API / zachowanie)
+- [ ] 📝 Dokumentacja
+- [ ] 🔧 Refaktor / porządki
+- [ ] 🧪 Testy
+
+## Checklist
+
+- [ ] `cargo fmt --all` wykonane
+- [ ] `cargo clippy --all-targets -- -D warnings` czysty
+- [ ] `cargo build --release` przechodzi
+- [ ] `cargo test --all` przechodzi
+- [ ] Zaktualizowałem `CHANGELOG.md` (sekcja `[Unreleased]`)
+- [ ] Zaktualizowałem `README.md` jeśli zmieniłem klawisze / CLI / zachowanie
+- [ ] Dodałem test dla nowej funkcjonalności (jeśli dotyczy)
+
+## Zrzuty / demo
+
+<!-- Screen recording, screenshot, output `--diagnose` — jeśli dotyczy UI. -->
+
+## Uwagi dla recenzenta
+
+<!-- Cokolwiek, co warto wiedzieć: trade-offy, wątpliwości, TODO w przyszłości. -->
+PYEOF
+
+# ──────────────────────────────────────────────────────────────── werdykt
+echo
+echo "✓ Gotowe. Utworzono:"
+find . -maxdepth 3 -type f \( -name "*.md" -o -name "*.yml" -o -name "*.toml" -o -name "LICENSE" -o -name ".gitignore" \) -not -path "./target/*" -not -path "./.git/*" | sort
+
+echo
+echo "→ Następne kroki:"
+echo "  git add ."
+echo "  git commit -m 'docs: badges, CHANGELOG, GitHub issue/PR templates'"
+echo "  git push origin main"
