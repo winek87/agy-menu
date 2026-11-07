@@ -1,0 +1,662 @@
+use chrono::{DateTime, Utc};
+use crossterm::event::{self, Event, KeyCode};
+use ratatui::{
+    Frame, Terminal,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+// ════════════════════════════════════════════════════════════ model ══
+
+#[derive(Deserialize, Debug)]
+struct MetadataFile {
+    conversations: HashMap<String, ConversationMeta>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ConversationMeta {
+    #[serde(default)]
+    is_internal: bool,
+    last_modified_time: Option<String>,
+    summary: Option<Summary>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Summary {
+    #[serde(default, rename = "Title")]
+    title: Option<String>,
+    #[serde(default, rename = "Preview")]
+    preview: Option<String>,
+    #[serde(default, rename = "NumSteps")]
+    num_steps: Option<usize>,
+    #[serde(default, rename = "WorkspaceURIs")]
+    workspace_uris: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct MessageFile {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ConversationItem {
+    id: String,
+    path: String,
+    title: String,
+    steps: usize,
+    workspaces: Vec<String>,
+    date_str: String,
+    sort_key: DateTime<Utc>,
+}
+
+// ════════════════════════════════════════════════════════════ paths ══
+
+struct Paths {
+    cache_dir: PathBuf,
+    brain_dir: PathBuf,
+}
+
+impl Paths {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let home = std::env::var("HOME")?;
+        let cache_dir = PathBuf::from(home)
+            .join(".agyw")
+            .join("shared")
+            .join("cache");
+        let brain_dir = cache_dir
+            .parent()
+            .ok_or("cache_dir has no parent")?
+            .join("brain");
+        Ok(Self {
+            cache_dir,
+            brain_dir,
+        })
+    }
+}
+
+// ════════════════════════════════════════════════════════════ helpers ══
+
+/// Bezpieczne cięcie po znakach UTF-8 (NIE po bajtach) — nie panikuje na `ł`, emoji itd.
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    let mut it = s.chars();
+    let mut out: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        out.push('…');
+    }
+    out
+}
+
+fn short_id(id: &str, n: usize) -> String {
+    id.chars().take(n).collect()
+}
+
+// ════════════════════════════════════════════════════════════ loader ══
+
+fn load_conversations(paths: &Paths) -> Vec<ConversationItem> {
+    let last_convs_path = paths.cache_dir.join("last_conversations.json");
+    let metadata_path = paths.cache_dir.join("conversation_metadata.json");
+
+    let last_convs: HashMap<String, String> = fs::read_to_string(&last_convs_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let id_to_path: HashMap<String, String> = last_convs.into_iter().map(|(k, v)| (v, k)).collect();
+
+    let meta_file: MetadataFile = fs::read_to_string(&metadata_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(MetadataFile {
+            conversations: HashMap::new(),
+        });
+
+    let mut items: Vec<ConversationItem> = Vec::new();
+
+    for (conv_id, data) in meta_file.conversations {
+        if data.is_internal {
+            continue;
+        }
+
+        let workspaces = data
+            .summary
+            .as_ref()
+            .and_then(|s| s.workspace_uris.clone())
+            .unwrap_or_default();
+
+        // Priorytet: oryginalny WorkspaceURI, inaczej cache z last_conversations.
+        let mut path = if let Some(ws) = workspaces.first() {
+            ws.replace("file://", "")
+        } else {
+            id_to_path.get(&conv_id).cloned().unwrap_or_default()
+        };
+
+        if path.is_empty() {
+            let potential_brain = paths.brain_dir.join(&conv_id);
+            path = if potential_brain.exists() {
+                format!("[Brain ID: {}…]", short_id(&conv_id, 8))
+            } else {
+                "(brak folderu)".to_string()
+            };
+        }
+
+        if path.contains("/tmp/agy-bridge") {
+            continue;
+        }
+
+        let (title, steps) = match data.summary {
+            Some(s) => {
+                let t = s.title.filter(|v| !v.trim().is_empty());
+                let p = s.preview.filter(|v| !v.trim().is_empty());
+                let title = t.or(p).unwrap_or_else(|| "Brak tytułu".to_string());
+                (title, s.num_steps.unwrap_or(0))
+            }
+            None => ("Brak podsumowania".to_string(), 0),
+        };
+
+        let mod_time_str = data.last_modified_time.unwrap_or_default();
+        let (sort_key, date_str) = match DateTime::parse_from_rfc3339(&mod_time_str) {
+            Ok(dt) => {
+                let utc = dt.with_timezone(&Utc);
+                (utc, utc.format("%Y-%m-%d %H:%M").to_string())
+            }
+            Err(_) => (DateTime::<Utc>::MIN_UTC, "Brak daty".to_string()),
+        };
+
+        items.push(ConversationItem {
+            id: conv_id,
+            path,
+            title,
+            steps,
+            workspaces,
+            date_str,
+            sort_key,
+        });
+    }
+
+    items.sort_by_key(|a| std::cmp::Reverse(a.sort_key));
+    //    items.sort_by(|a, b| b.sort_key.cmp(&a.sort_key));
+    items
+}
+
+/// Buduje treść panelu szczegółów — wołane raz na zmianę zaznaczenia (cache w App).
+fn build_details(item: &ConversationItem, brain_dir: &Path) -> String {
+    let mut info = String::with_capacity(1024);
+
+    let _ = write!(
+        info,
+        "ID: {}\nData: {}\nKroki: {}\n\nOryginalny Folder (Workspace):\n  {}\n\nTytuł:\n  {}\n",
+        item.id, item.date_str, item.steps, item.path, item.title
+    );
+
+    if !item.workspaces.is_empty() {
+        info.push_str("\nWszystkie Workspace URIs:\n");
+        for ws in &item.workspaces {
+            let _ = writeln!(info, "  - {}", ws);
+        }
+    }
+
+    let target_brain = brain_dir.join(&item.id);
+    if !target_brain.exists() {
+        return info;
+    }
+
+    // ── ostatnia wiadomość ──
+    let messages_dir = target_brain.join(".system_generated").join("messages");
+    if let Ok(entries) = fs::read_dir(&messages_dir) {
+        let mut msg_files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+            .collect();
+
+        msg_files.sort_by(|a, b| {
+            let ta = fs::metadata(a)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let tb = fs::metadata(b)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            tb.cmp(&ta)
+        });
+
+        if let Some(latest) = msg_files.first()
+            && let Ok(s) = fs::read_to_string(latest)
+            && let Ok(msg) = serde_json::from_str::<MessageFile>(&s)
+            && let Some(txt) = msg.content.or(msg.text)
+        {
+            let preview = truncate_chars(&txt, 147);
+            let _ = write!(info, "\nOstatnia wiadomość:\n  \"{}\"\n", preview);
+        }
+    }
+
+    // ── pliki .md ──
+    info.push_str("\n--- Pliki Raportów (.md) ---\n");
+    if let Ok(entries) = fs::read_dir(&target_brain) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file()
+                && p.extension().is_some_and(|e| e == "md")
+                && let Some(fname) = p.file_name().and_then(|n| n.to_str())
+            {
+                let _ = writeln!(info, " 📄 {}", fname);
+            }
+        }
+    }
+
+    info
+}
+
+fn load_transcript_lines(item: &ConversationItem, brain_dir: &Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    let transcript_path = brain_dir
+        .join(&item.id)
+        .join(".system_generated")
+        .join("logs")
+        .join("transcript.jsonl");
+
+    if transcript_path.exists()
+        && let Ok(content) = fs::read_to_string(&transcript_path)
+    {
+        for (idx, line) in content.lines().enumerate() {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                let role = val
+                    .get("role")
+                    .or_else(|| val.get("type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("WPIS");
+                let text = val
+                    .get("content")
+                    .or_else(|| val.get("text"))
+                    .or_else(|| val.get("message"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("{:?}", val));
+
+                lines.push(format!(
+                    ">>> [Krok {} | Rola/Typ: {}]\n{}\n{}",
+                    idx + 1,
+                    role,
+                    text,
+                    "─".repeat(80)
+                ));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push("Brak wpisów w pliku transcript.jsonl dla tej sesji.".to_string());
+    }
+    lines
+}
+
+// ════════════════════════════════════════════════════════════════ app ══
+
+#[derive(PartialEq)]
+enum ActiveView {
+    ListAndDetails,
+    Transcript,
+}
+
+struct App {
+    items: Vec<ConversationItem>,
+    filtered_items: Vec<ConversationItem>,
+    list_state: ListState,
+    search_query: String,
+    is_searching: bool,
+    details_scroll: u16,
+    transcript_scroll: u16,
+    active_view: ActiveView,
+    transcript_lines: Vec<String>,
+    selected_session: Option<ConversationItem>,
+    brain_dir: PathBuf,
+    /// Cache treści panelu szczegółów — budowany tylko przy zmianie zaznaczenia.
+    details_cache: String,
+    details_cache_id: Option<String>,
+}
+
+impl App {
+    fn new(items: Vec<ConversationItem>, brain_dir: PathBuf) -> Self {
+        let mut app = Self {
+            filtered_items: items.clone(),
+            items,
+            list_state: ListState::default(),
+            search_query: String::new(),
+            is_searching: false,
+            details_scroll: 0,
+            transcript_scroll: 0,
+            active_view: ActiveView::ListAndDetails,
+            transcript_lines: Vec::new(),
+            selected_session: None,
+            brain_dir,
+            details_cache: String::new(),
+            details_cache_id: None,
+        };
+        if !app.filtered_items.is_empty() {
+            app.list_state.select(Some(0));
+        }
+        app
+    }
+
+    fn current_item(&self) -> Option<&ConversationItem> {
+        let idx = self.list_state.selected()?;
+        self.filtered_items.get(idx)
+    }
+
+    /// Odświeża cache szczegółów tylko jeśli zmieniło się zaznaczenie.
+    fn refresh_details(&mut self) {
+        let current_id = self.current_item().map(|i| i.id.clone());
+        if current_id == self.details_cache_id {
+            return;
+        }
+        let text = match self.current_item() {
+            Some(item) => build_details(item, &self.brain_dir),
+            None => "Brak wyników wyszukiwania".to_string(),
+        };
+        self.details_cache = text;
+        self.details_cache_id = current_id;
+    }
+
+    fn update_filter(&mut self) {
+        let q = self.search_query.to_lowercase();
+        self.filtered_items = if q.is_empty() {
+            self.items.clone()
+        } else {
+            self.items
+                .iter()
+                .filter(|item| {
+                    item.title.to_lowercase().contains(&q) || item.path.to_lowercase().contains(&q)
+                })
+                .cloned()
+                .collect()
+        };
+
+        self.list_state.select(if self.filtered_items.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
+        self.details_scroll = 0;
+    }
+
+    fn next(&mut self) {
+        let len = self.filtered_items.len();
+        if len == 0 {
+            return;
+        }
+        let i = match self.list_state.selected() {
+            Some(i) if i + 1 < len => i + 1,
+            _ => 0,
+        };
+        self.list_state.select(Some(i));
+        self.details_scroll = 0;
+    }
+
+    fn previous(&mut self) {
+        let len = self.filtered_items.len();
+        if len == 0 {
+            return;
+        }
+        let i = match self.list_state.selected() {
+            Some(0) | None => len - 1,
+            Some(i) => i - 1,
+        };
+        self.list_state.select(Some(i));
+        self.details_scroll = 0;
+    }
+
+    fn go_to_start(&mut self) {
+        if !self.filtered_items.is_empty() {
+            self.list_state.select(Some(0));
+            self.details_scroll = 0;
+        }
+    }
+
+    fn go_to_end(&mut self) {
+        if !self.filtered_items.is_empty() {
+            self.list_state.select(Some(self.filtered_items.len() - 1));
+            self.details_scroll = 0;
+        }
+    }
+
+    fn load_transcript(&mut self) {
+        let lines = match self.current_item() {
+            Some(item) => load_transcript_lines(item, &self.brain_dir),
+            None => Vec::new(),
+        };
+        self.transcript_lines = lines;
+        self.transcript_scroll = 0;
+        self.active_view = ActiveView::Transcript;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════ ui ══
+
+fn draw(f: &mut Frame, app: &mut App) {
+    // Odśwież cache szczegółów, jeśli zmieniło się zaznaczenie.
+    app.refresh_details();
+
+    let size = f.area();
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(2)])
+        .split(size);
+
+    match app.active_view {
+        ActiveView::ListAndDetails => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .split(main_chunks[0]);
+
+            let title_text = if app.is_searching {
+                format!(" Szukaj: {}█ ", app.search_query)
+            } else if !app.search_query.is_empty() {
+                format!(" Lista (Filtr: {}) [ESC by wyczyścić] ", app.search_query)
+            } else {
+                " Historia rozmów AGY [/ - szukaj] ".to_string()
+            };
+
+            let list_items: Vec<ListItem> = app
+                .filtered_items
+                .iter()
+                .map(|i| {
+                    ListItem::new(format!("{} | {} (Kroki: {})", i.date_str, i.title, i.steps))
+                })
+                .collect();
+
+            let list = List::new(list_items)
+                .block(Block::default().borders(Borders::ALL).title(title_text))
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol(">> ");
+
+            f.render_stateful_widget(list, chunks[0], &mut app.list_state);
+
+            let details_widget = Paragraph::new(app.details_cache.as_str())
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Szczegóły / Podgląd "),
+                )
+                .wrap(Wrap { trim: true })
+                .scroll((app.details_scroll, 0))
+                .style(Style::default().fg(Color::Cyan));
+
+            f.render_widget(details_widget, chunks[1]);
+        }
+        ActiveView::Transcript => {
+            let transcript_widget = Paragraph::new(app.transcript_lines.join("\n"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Pełny Transkrypt Sesji (transcript.jsonl) [ESC/T = powrót] "),
+                )
+                .wrap(Wrap { trim: true })
+                .scroll((app.transcript_scroll, 0))
+                .style(Style::default().fg(Color::Yellow));
+
+            f.render_widget(transcript_widget, main_chunks[0]);
+        }
+    }
+
+    let help_text = match app.active_view {
+        ActiveView::ListAndDetails => {
+            if app.is_searching {
+                " Wpisz frazę i naciśnij [Enter] aby zatwierdzić, [ESC] aby anulować "
+            } else {
+                " [↑/↓/Home/End] Nawigacja | [/] Szukaj | [T] Transkrypt | [Enter] Wybierz | [Q] Wyjdź "
+            }
+        }
+        ActiveView::Transcript => {
+            " [↑/↓/PageUp/PageDown] Przewiń transkrypt | [ESC / T] Powrót do listy "
+        }
+    };
+
+    let help_bar =
+        Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::DarkGray));
+    f.render_widget(help_bar, main_chunks[1]);
+}
+
+// ═════════════════════════════════════════════════════════════ main ══
+
+type AppTerminal = Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let paths = Paths::new()?;
+    let items = load_conversations(&paths);
+
+    if items.is_empty() {
+        println!("Brak zapisanych rozmów.");
+        return Ok(());
+    }
+
+    let mut app = App::new(items, paths.brain_dir);
+
+    // ratatui::init() ustawia raw mode, alternate screen ORAZ panic hook,
+    // który przywraca terminal nawet jeśli coś panikuje w środku.
+    let mut terminal: AppTerminal = ratatui::init();
+    let run_result = run_loop(&mut terminal, &mut app);
+    ratatui::restore();
+
+    // Sprzątanie TUI zawsze przed propagacją błędu.
+    run_result?;
+
+    // ── Uruchomienie wybranej sesji z CD do oryginalnego Workspace ──
+    if let Some(item) = app.selected_session {
+        let target_path = PathBuf::from(&item.path);
+
+        let mut cmd = Command::new("agy");
+        cmd.arg("--conversation").arg(&item.id);
+
+        if target_path.exists() && target_path.is_dir() {
+            println!(
+                "\nPrzełączanie katalogu na oryginalny Workspace: {}",
+                item.path
+            );
+            cmd.current_dir(&target_path);
+        } else {
+            println!(
+                "\nUwaga: Folder roboczy '{}' nie istnieje. Uruchamianie w bieżącym katalogu.",
+                item.path
+            );
+        }
+
+        println!("Uruchamianie konwersacji: {}\n", item.id);
+        cmd.status()?;
+    }
+
+    Ok(())
+}
+
+fn run_loop(terminal: &mut AppTerminal, app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        terminal.draw(|f| draw(f, app))?;
+
+        if let Event::Key(key) = event::read()? {
+            match app.active_view {
+                ActiveView::ListAndDetails => {
+                    if app.is_searching {
+                        match key.code {
+                            KeyCode::Enter => app.is_searching = false,
+                            KeyCode::Esc => {
+                                app.search_query.clear();
+                                app.update_filter();
+                                app.is_searching = false;
+                            }
+                            KeyCode::Backspace => {
+                                app.search_query.pop();
+                                app.update_filter();
+                            }
+                            KeyCode::Char(c) => {
+                                app.search_query.push(c);
+                                app.update_filter();
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Char('Q') => break,
+                            KeyCode::Char('/') => app.is_searching = true,
+                            KeyCode::Char('t') | KeyCode::Char('T') => app.load_transcript(),
+                            KeyCode::Esc => {
+                                if !app.search_query.is_empty() {
+                                    app.search_query.clear();
+                                    app.update_filter();
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => app.next(),
+                            KeyCode::Up | KeyCode::Char('k') => app.previous(),
+                            KeyCode::Home => app.go_to_start(),
+                            KeyCode::End => app.go_to_end(),
+                            KeyCode::PageDown => {
+                                app.details_scroll = app.details_scroll.saturating_add(5);
+                            }
+                            KeyCode::PageUp => {
+                                app.details_scroll = app.details_scroll.saturating_sub(5);
+                            }
+                            KeyCode::Enter => {
+                                if let Some(item) = app.current_item() {
+                                    app.selected_session = Some(item.clone());
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                ActiveView::Transcript => match key.code {
+                    KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => {
+                        app.active_view = ActiveView::ListAndDetails;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.transcript_scroll = app.transcript_scroll.saturating_add(1);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.transcript_scroll = app.transcript_scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown => {
+                        app.transcript_scroll = app.transcript_scroll.saturating_add(15);
+                    }
+                    KeyCode::PageUp => {
+                        app.transcript_scroll = app.transcript_scroll.saturating_sub(15);
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+    Ok(())
+}

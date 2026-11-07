@@ -1,0 +1,34 @@
+[package]
+name = "agy-menu"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "Interaktywne TUI do przeglądania i wznawiania rozmów AGY"
+license = "MIT"
+publish = false
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+crossterm = "0.29.0"
+ratatui = "0.30.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+# ── Release: maksymalna wydajność, mały binarny ──
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+debug = false
+incremental = false
+overflow-checks = false
+# panic = "unwind" (domyślne) — potrzebne, by ratatui::restore() / panic hook
+# posprzątał terminal po ewentualnej panice. NIE zmieniaj na "abort".
+
+# ── Dev: szybka kompilacja własnego kodu, zoptymalizowane zależności ──
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
