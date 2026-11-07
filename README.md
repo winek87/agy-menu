@@ -1,9 +1,12 @@
 # agy-menu
 
-Interaktywne TUI do przeglądania, filtrowania i wznawiania rozmów **AGY** — z wielu kont użytkowników jednocześnie.
+[![CI](https://github.com/winek87/agy-menu/actions/workflows/ci.yml/badge.svg)](https://github.com/winek87/agy-menu/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/winek87/agy-menu?logo=github)](https://github.com/winek87/agy-menu/releases)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos-lightgrey)]()
 
-![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
+Interaktywne TUI do przeglądania, filtrowania i wznawiania rozmów **AGY** — z wielu kont użytkowników jednocześnie.
 
 ## Funkcje
 
@@ -18,7 +21,7 @@ Interaktywne TUI do przeglądania, filtrowania i wznawiania rozmów **AGY** — 
 ## Instalacja
 
 ```bash
-git clone https://github.com/<twoj-user>/agy-menu.git
+git clone https://github.com/winek87/agy-menu.git
 cd agy-menu
 cargo build --release
 sudo install -m 755 target/release/agy-menu /usr/local/bin/agy-menu
@@ -124,6 +127,21 @@ sudo -iu ala sh -c "cd '/home/ala/projekt' && agy --conversation 'abc-123'"
 - Rust ≥ 1.88 (edycja 2024)
 - `agy` w `$PATH`
 - Do wznawiania cudzych sesji: `su` lub `sudo`
+
+## Wkład
+
+PR-y mile widziane. Przed wysłaniem:
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+cargo test --all
+```
+
+Zobacz [CONTRIBUTING.md](CONTRIBUTING.md) po szczegóły.
+
+Wszystkie zmiany lądują w [CHANGELOG.md](CHANGELOG.md) (sekcja `[Unreleased]`).
 
 ## Licencja
 

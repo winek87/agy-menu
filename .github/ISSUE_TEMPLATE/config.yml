@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Dokumentacja
+    url: https://github.com/winek87/agy-menu#readme
+    about: Przeczytaj README przed otwarciem issue — może już jest odpowiedź.
+  - name: 💬 Dyskusje
+    url: https://github.com/winek87/agy-menu/discussions
+    about: Pytania, pomysły, pomoc — tutaj zamiast w issues.
